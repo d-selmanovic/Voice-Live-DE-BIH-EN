@@ -4,9 +4,29 @@
 <main><section class="conversation"><h1>Lass uns sprechen.</h1><p>Fragen klären, Informationen suchen und Demo-Tickets vorbereiten. Du kannst jederzeit dazwischenreden.</p>
 <div class="voice"><div class="rings" aria-hidden="true"><i></i><i></i><i></i></div><p id="status" role="status">Bereit für dein erstes Gespräch</p><p id="timer">00:00</p></div>
 <form id="login" hidden><label for="password">Zugangspasswort</label><input id="password" type="password" autocomplete="current-password"><button>Anmelden</button></form>
+<div class="test-settings">
+<label for="voice-select">Stimme<select id="voice-select"><option value="marin">Marin</option></select></label>
+<label for="language-select">Testsprache<select id="language-select"><option value="de">Deutsch</option><option value="bs">Bosanski</option><option value="en">English</option></select></label>
+<label class="tester-field" for="tester-code">Dein persönlicher Testcode<input id="tester-code" minlength="3" maxlength="64" autocomplete="off" placeholder="z. B. tester-7f29"></label>
+</div>
+<p class="note">Eine Stimme und Sprache pro Test. Zum Wechseln das Gespräch beenden und neu starten. Verwende immer denselben Testcode, auch auf anderen Geräten. Bitte keine Namen oder E-Mail-Adressen eingeben.</p>
 <div class="controls"><button id="start">Gespräch starten</button><button id="mute" disabled>Mikrofon ausschalten</button><button id="stop" disabled>Beenden</button></div>
 <audio id="audio" autoplay controls hidden></audio><p id="error" role="alert"></p>
 <p class="note">Du sprichst mit einer KI. Audio wird von OpenAI verarbeitet. Transkripte und bestätigte Demo-Tickets werden im Backend gespeichert. Gespräche enden nach spätestens 10 Minuten.</p></section>
 <aside><section><h2>Gespräch</h2><div id="transcript" aria-live="polite"><p class="empty">Deine gesprochenen Worte und die Antworten erscheinen hier.</p></div></section>
-<section><h2>Aktionen</h2><div id="approvals"><p class="empty">Ticketentwürfe werden hier vor dem Speichern zur Bestätigung angezeigt.</p></div><button id="revise" disabled>Aufgabe zurücksetzen</button><p class="note">Vor einer Korrektur drücken. Offene Ticketentwürfe werden dadurch ungültig.</p><div id="results"></div></section></aside></main>
+<section><h2>Aktionen</h2><div id="approvals"><p class="empty">Ticketentwürfe werden hier vor dem Speichern zur Bestätigung angezeigt.</p></div><button id="revise" disabled>Aufgabe zurücksetzen</button><p class="note">Vor einer Korrektur drücken. Offene Ticketentwürfe werden dadurch ungültig.</p><div id="results"></div></section>
+<section><h2>Stimme bewerten</h2><p id="rating-context">Starte ein Gespräch und höre dir die Stimme an.</p>
+<form id="rating-form"><fieldset id="rating-fields" disabled>
+<label for="pronunciation">Aussprache<select id="pronunciation" required><option value="">Bitte auswählen</option><option value="1">1 – sehr schlecht</option><option value="2">2 – schlecht</option><option value="3">3 – mittel</option><option value="4">4 – gut</option><option value="5">5 – sehr gut / muttersprachlich</option></select></label>
+<label for="clarity">Verständlichkeit<select id="clarity" required><option value="">Bitte auswählen</option><option value="1">1 – sehr schlecht</option><option value="2">2 – schlecht</option><option value="3">3 – mittel</option><option value="4">4 – gut</option><option value="5">5 – sehr gut</option></select></label>
+<label for="naturalness">Natürlichkeit<select id="naturalness" required><option value="">Bitte auswählen</option><option value="1">1 – sehr schlecht</option><option value="2">2 – schlecht</option><option value="3">3 – mittel</option><option value="4">4 – gut</option><option value="5">5 – sehr gut</option></select></label>
+<label for="rating-comment">Was fiel dir auf? (optional)<textarea id="rating-comment" maxlength="500" placeholder="Zum Beispiel: č und ć klingen gleich. Keine persönlichen Daten."></textarea></label>
+<button>Bewertung speichern</button></fieldset></form><p id="rating-message" role="status"></p>
+<p class="note">Bewerte nur die angegebene Sprache. Falls du im Gespräch die Sprache wechselst, starte für die Bewertung einen neuen Test. Pro Testcode, Stimme, Sprache und Testversion zählt die neueste Bewertung.</p></section></aside></main>
+<section class="statistics"><div class="stats-heading"><div><p class="eyebrow">Gemeinsame Stimmenstudie</p><h2>Welche Stimme passt zu welcher Sprache?</h2></div><button id="refresh-stats">Aktualisieren</button></div>
+<label for="stats-language">Sprache vergleichen<select id="stats-language"><option value="bs">Bosanski</option><option value="de">Deutsch</option><option value="en">English</option></select></label>
+<label for="stats-version">Testversion<select id="stats-version"></select></label>
+<p id="stats-summary" role="status">Nach der Anmeldung siehst du die gemeinsamen Ergebnisse.</p>
+<div class="table-wrap"><table><caption id="stats-caption">Bewertungen der aktuellen Testversion</caption><thead><tr><th>Stimme</th><th>Testcodes</th><th>Aussprache</th><th>Verständlichkeit</th><th>Natürlichkeit</th><th>Gesamt</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
+<p class="note">Alle Werte von 1 bis 5. Gesamt = Mittelwert der drei Kriterien. Sortierung nach Aussprache. Testcodes sind selbst gewählte Kennungen, keine geprüften Personenidentitäten. Wenige Bewertungen sind noch keine belastbare Empfehlung. Statistiken enthalten keine Gesprächsinhalte; Bewertungen sind für Personen mit dem Zugangspasswort sichtbar.</p></section>
 <script type="module" src="/app.js"></script></body></html>

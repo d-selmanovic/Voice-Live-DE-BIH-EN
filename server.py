@@ -11,6 +11,8 @@ from pathlib import Path
 from aiohttp import web, ClientSession, ClientTimeout, WSMsgType
 from prompts import LIVE, BACKEND, TOOLS
 from state import Store, validate_ticket
+from feedback import FeedbackStore
+from voices import VOICES, LANGUAGES, VERSION, selection, language_prompt
 
 ROOT = Path(__file__).resolve().parent
 for path in [ROOT / '.env.local', ROOT.parent / '.env.local']:
@@ -29,6 +31,9 @@ if HOST not in ['127.0.0.1', 'localhost', '::1'] and (not PASSWORD or not ORIGIN
 if ON_RENDER and len(PASSWORD) < 12:
     raise RuntimeError('Render-Testbetrieb benötigt ein APP_PASSWORD mit mindestens 12 Zeichen')
 store = Store(Path(os.getenv('DATA_DIR', str(ROOT / 'data'))) / 'agent.sqlite')
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+STUDY_VERSION = VERSION + '-' + hashlib.sha256((LIVE + BACKEND + os.getenv('LIVE_MODEL', 'gpt-live-1') + os.getenv('BACKEND_MODEL', 'gpt-6-luna')).encode()).hexdigest()[:8]
+feedback = FeedbackStore(DATABASE_URL, ROOT / 'data' / 'feedback.sqlite' if not DATABASE_URL else None) if DATABASE_URL or not ON_RENDER else None
 auth = {}
 sessions = {}
 login_attempts = {}
@@ -184,6 +189,9 @@ async def sideband(s):
                 store.audit(s['id'], kind, event)
             elif kind in ['session.input_transcript.delta', 'session.output_transcript.delta']:
                 store.audit(s['id'], kind, event)
+                if kind == 'session.output_transcript.delta' and event.get('delta', '').strip() and s.get('test_id') and not s.get('heard'):
+                    await asyncio.to_thread(feedback.heard, s['test_id'])
+                    s['heard'] = True
             elif kind == 'session.closed':
                 s['closed'].set()
                 store.audit(s['id'], kind, event)
@@ -204,13 +212,18 @@ async def create_session(request):
         raise web.HTTPTooManyRequests(text='Nur ein Gespräch gleichzeitig; maximal drei Starts pro Minute')
     limits[owner] = recent + [now]
     body = await request.json()
+    try:
+        voice, language, tester_code = selection(body)
+    except (ValueError, TypeError):
+        raise web.HTTPBadRequest(text='Ungültige Stimme, Sprache oder Testcode')
     sdp = body.get('sdp')
     if not isinstance(sdp, str) or not sdp.startswith('v=0') or len(sdp) > 60000:
         raise web.HTTPBadRequest(text='Ungültiges SDP-Angebot')
     if not KEY:
         raise web.HTTPServiceUnavailable(text='OpenAI-Key fehlt im Backend')
     headers = {'Authorization': 'Bearer ' + KEY, 'OpenAI-Safety-Identifier': hashlib.sha256(owner.encode()).hexdigest()}
-    payload = {'session': {'model': os.getenv('LIVE_MODEL', 'gpt-live-1'), 'instructions': LIVE,
+    payload = {'session': {'model': os.getenv('LIVE_MODEL', 'gpt-live-1'),
+        'instructions': LIVE + '\n' + language_prompt(language), 'audio': {'output': {'voice': voice}},
         'delegation': {'type': 'responses', 'responses': {'model': os.getenv('BACKEND_MODEL', 'gpt-6-luna'),
             'instructions': BACKEND, 'tools': TOOLS, 'tool_choice': 'auto', 'parallel_tool_calls': False}}},
         'transport': {'type': 'webrtc', 'sdp': sdp}}
@@ -228,13 +241,19 @@ async def create_session(request):
                 return web.json_response({'error': messages.get(response.status, f'OpenAI-Verbindung fehlgeschlagen (HTTP {response.status}). API-Konfiguration prüfen.')}, status=502)
             data = await response.json()
         sid = data['session']['id']
+        test_id, test_token = None, None
+        if feedback and tester_code:
+            test_id, test_token = uuid.uuid4().hex, secrets.token_urlsafe(32)
+            tester = hashlib.sha256(tester_code.encode()).hexdigest()
+            await asyncio.to_thread(feedback.new_test, test_id, test_token, tester, voice, language, STUDY_VERSION)
         s = {'id': sid, 'owner': owner, 'revision': 0, 'calls': set(), 'pending': {}, 'listeners': set(),
-            'closed': asyncio.Event(), 'closing': False, 'jobs': set(), 'batches': {}}
+            'closed': asyncio.Event(), 'closing': False, 'jobs': set(), 'batches': {}, 'test_id': test_id}
         sessions[sid] = s
         s['ws'] = await client.ws_connect(f'wss://api.openai.com/v1/live/sessions/{sid}/attach', headers=headers, max_msg_size=4*1024*1024)
         s['reader'] = asyncio.create_task(sideband(s))
         s['expiry'] = asyncio.create_task(expire_session(s))
-        return web.json_response({'session_id': sid, 'sdp': data['transport']['sdp']}, status=201)
+        return web.json_response({'session_id': sid, 'sdp': data['transport']['sdp'],
+            'test_id': test_id, 'test_token': test_token, 'voice': voice, 'language': language, 'version': STUDY_VERSION}, status=201)
     except Exception:
         if 'sid' in locals() and sid in sessions:
             sessions[sid]['closing'] = True
@@ -324,7 +343,26 @@ async def lifecycle(app):
 
 
 async def config(request):
-    return web.json_response({'password_required': bool(PASSWORD)})
+    return web.json_response({'password_required': bool(PASSWORD), 'voices': list(VOICES),
+        'languages': LANGUAGES, 'version': STUDY_VERSION, 'ratings_enabled': feedback is not None,
+        'durable_ratings': bool(DATABASE_URL)})
+
+
+async def ratings(request):
+    if feedback is None:
+        raise web.HTTPServiceUnavailable(text='Dauerhafte Bewertungsdatenbank ist noch nicht eingerichtet')
+    if request.method == 'POST':
+        body = await request.json()
+        try:
+            await asyncio.to_thread(feedback.rate, body)
+        except ValueError as e:
+            raise web.HTTPBadRequest(text=str(e))
+        return web.json_response({'ok': True})
+    result = await asyncio.to_thread(feedback.stats, request.query.get('version', STUDY_VERSION))
+    result['versions'] = await asyncio.to_thread(feedback.versions)
+    if STUDY_VERSION not in result['versions']:
+        result['versions'].insert(0, STUDY_VERSION)
+    return web.json_response(result)
 
 async def health(request):
     return web.json_response({'status': 'ok'}, headers={'Cache-Control':'no-store'})
@@ -336,6 +374,8 @@ def create_app():
     app.router.add_get('/healthz', health)
     app.router.add_post('/api/login', login)
     app.router.add_post('/api/session', create_session)
+    app.router.add_get('/api/ratings', ratings)
+    app.router.add_post('/api/ratings', ratings)
     app.router.add_post('/api/session/{sid}/action', action)
     app.router.add_get('/api/session/{sid}/events', events)
     app.router.add_get('/', static)

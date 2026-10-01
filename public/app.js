@@ -1,6 +1,11 @@
 const $ = id => document.getElementById(id);
 let pc, dc, mic, sid, socket, timer, started, muted = false, closing = false, generation = 0;
 const captions = new Map();
+let lastTest = null, allStats = null, ratingsEnabled = false;
+const settingIds = ['voice-select', 'language-select', 'tester-code'];
+function remember(key, value){try{localStorage.setItem(key,value);}catch{}}
+function saved(key){try{return localStorage.getItem(key);}catch{return null;}}
+function settingsLocked(locked){for(const id of settingIds)$(id).disabled=locked;}
 async function api(path, data) {
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
   if (!r.ok) { let message = await r.text(); try {message=JSON.parse(message).error || message;} catch {} throw new Error(message); }
@@ -14,6 +19,7 @@ function cleanup(){
   for(const id of ['mute','stop','revise']) $(id).disabled=true;
   $('start').disabled=false; $('start').textContent='Neues Gespräch';
   $('approvals').replaceChildren(); sid=null; muted=false; closing=false; $('mute').textContent='Mikrofon ausschalten';
+  settingsLocked(false);
 }
 function caption(e){
   const who=e.type.includes('input_transcript')?'Du':'Activi';
@@ -51,8 +57,13 @@ async function ice(peer){
 }
 $('start').onclick=async()=>{
   $('start').disabled=true; $('error').textContent=''; setStatus('Mikrofon und Verbindung werden vorbereitet …');
+  settingsLocked(true); lastTest=null; $('rating-fields').disabled=true;
+  $('rating-form').reset();$('rating-message').textContent='';
   const attempt=++generation;
   try{
+    const tester=$('tester-code').value.trim();
+    if(ratingsEnabled && tester.length<3)throw new Error('Bitte einen persönlichen Testcode mit mindestens 3 Zeichen eingeben.');
+    for(const id of settingIds)remember('activi-'+id,$(id).value);
     await api('/api/login',{password:$('password').value});
     mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
     pc=new RTCPeerConnection(); pc.ontrack=e=>{$('audio').srcObject=e.streams[0]||new MediaStream([e.track]); $('audio').play().catch(()=>{$('audio').hidden=false;});};
@@ -66,7 +77,10 @@ $('start').onclick=async()=>{
       if(e.type==='session.closed')setStatus('Gespräch abgeschlossen');
     };
     await pc.setLocalDescription(await pc.createOffer());await ice(pc);
-    const result=await api('/api/session',{sdp:pc.localDescription.sdp});sid=result.session_id;
+    const result=await api('/api/session',{sdp:pc.localDescription.sdp,voice:$('voice-select').value,
+      language:$('language-select').value,tester_code:tester});sid=result.session_id;
+    lastTest=result.test_id?result:null;
+    $('rating-context').textContent=lastTest?`${result.voice} · ${config.languages[result.language]} · ${result.version}`:'Bewertungsdatenbank ist noch nicht eingerichtet.';
     await pc.setRemoteDescription({type:'answer',sdp:result.sdp});
     socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/session/${encodeURIComponent(sid)}/events`);
     socket.onmessage=({data})=>{const e=JSON.parse(data);
@@ -80,10 +94,11 @@ $('start').onclick=async()=>{
     try{await Promise.race([ready,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('Voice-Session wurde nicht rechtzeitig bereit.')),15000);})]);}finally{clearTimeout(timeout);}
     if(attempt!==generation)return;
     setStatus('Verbunden. Du kannst jetzt sprechen.');document.body.classList.add('live');
+    $('rating-fields').disabled=!lastTest;
     for(const id of ['mute','stop','revise'])$(id).disabled=false;
     started=Date.now();timer=setInterval(()=>{const seconds=Math.floor((Date.now()-started)/1000);$('timer').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;},1000);
   }catch(e){$('error').textContent=e.name==='NotAllowedError'?'Mikrofonzugriff wurde abgelehnt. Bitte in den Browsereinstellungen erlauben.':e.message;
-    if(sid)try{await action({action:'close'});}catch{} cleanup();setStatus('Verbindung konnte nicht gestartet werden');}
+    if(sid)try{await action({action:'close'});}catch{} lastTest=null;$('rating-fields').disabled=true;cleanup();setStatus('Verbindung konnte nicht gestartet werden');}
 };
 async function stop(){
   if(closing)return;closing=true;$('stop').disabled=true;setStatus('Gespräch wird beendet …');
@@ -94,6 +109,43 @@ async function stop(){
 $('stop').onclick=stop;
 $('mute').onclick=()=>{muted=!muted;mic?.getAudioTracks().forEach(t=>t.enabled=!muted);$('mute').textContent=muted?'Mikrofon einschalten':'Mikrofon ausschalten';};
 $('revise').onclick=async()=>{try{await action({action:'revise'});$('approvals').replaceChildren();setStatus('Aufgabe zurückgesetzt. Beschreibe dein neues Anliegen.');}catch(e){$('error').textContent=e.message;}};
-$('login').onsubmit=async e=>{e.preventDefault();try{await api('/api/login',{password:$('password').value});$('login').hidden=true;$('start').disabled=false;}catch(err){$('error').textContent=err.message;}};
+$('login').onsubmit=async e=>{e.preventDefault();try{await api('/api/login',{password:$('password').value});$('login').hidden=true;$('start').disabled=false;await loadStats();}catch(err){$('error').textContent=err.message;}};
 window.addEventListener('pagehide',()=>{if(sid)navigator.sendBeacon(`/api/session/${encodeURIComponent(sid)}/action`,new Blob([JSON.stringify({action:'close'})],{type:'application/json'}));mic?.getTracks().forEach(t=>t.stop());});
-const config=await fetch('/api/config').then(r=>r.json());if(config.password_required){$('login').hidden=false;$('start').disabled=true;}
+function renderStats(){
+  if(!allStats)return;
+  const rows=allStats.rows.filter(r=>r.language===$('stats-language').value);
+  $('stats-summary').textContent=`${allStats.testers} verschiedene Testcodes insgesamt · ${allStats.ratings} Bewertungen · ${rows.length} bewertete Stimmen in dieser Sprache`;
+  $('stats-caption').textContent=`Testversion ${allStats.version} · neueste Bewertung pro Testcode`;
+  $('stats-rows').replaceChildren();
+  if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=6;td.textContent='Noch keine Bewertungen in dieser Sprache.';tr.append(td);$('stats-rows').append(tr);return;}
+  for(const row of rows){const tr=document.createElement('tr');
+    for(const key of ['voice','testers','pronunciation','clarity','naturalness','overall']){
+      const td=document.createElement('td');td.textContent=typeof row[key]==='number'&&key!=='testers'?row[key].toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2}):row[key];tr.append(td);
+    }$('stats-rows').append(tr);
+  }
+}
+async function loadStats(){
+  if(!ratingsEnabled){$('stats-summary').textContent='Gemeinsame Bewertungen werden verfügbar, sobald die dauerhafte Datenbank eingerichtet ist.';return;}
+  try{const version=$('stats-version').value;const r=await fetch('/api/ratings'+(version?'?version='+encodeURIComponent(version):''));if(!r.ok)throw new Error(r.status===401?'Bitte anmelden, um die Statistik zu sehen.':'Statistik konnte nicht geladen werden.');allStats=await r.json();
+    $('stats-version').replaceChildren(...allStats.versions.map(v=>{const o=document.createElement('option');o.value=v;o.textContent=v+(v===config.version?' (aktuell)':'');return o;}));
+    $('stats-version').value=allStats.version;renderStats();}
+  catch(e){$('stats-summary').textContent=e.message;}
+}
+$('rating-form').onsubmit=async e=>{
+  e.preventDefault();if(!lastTest)return;const test=lastTest;$('rating-fields').disabled=true;
+  try{await api('/api/ratings',{test_id:test.test_id,test_token:test.test_token,
+    pronunciation:Number($('pronunciation').value),clarity:Number($('clarity').value),
+    naturalness:Number($('naturalness').value),comment:$('rating-comment').value});
+    $('rating-message').textContent='Gespeichert. Deine neueste Bewertung zählt einmal für diese Stimme und Sprache.';await loadStats();
+  }catch(err){$('rating-message').textContent=err.message;}
+  finally{if(lastTest===test)$('rating-fields').disabled=false;}
+};
+$('stats-language').onchange=renderStats;$('stats-version').onchange=loadStats;$('refresh-stats').onclick=loadStats;
+const config=await fetch('/api/config').then(r=>r.json());ratingsEnabled=config.ratings_enabled;
+$('voice-select').replaceChildren(...config.voices.map(v=>{const o=document.createElement('option');o.value=v;o.textContent=v[0].toUpperCase()+v.slice(1);return o;}));
+for(const id of ['voice-select','language-select']){const value=saved('activi-'+id);if([...$(id).options].some(o=>o.value===value))$(id).value=value;}
+$('tester-code').value=saved('activi-tester-code')||'tester-'+crypto.randomUUID().slice(0,12);remember('activi-tester-code',$('tester-code').value);
+for(const id of settingIds)$(id).onchange=()=>remember('activi-'+id,$(id).value);
+if(config.password_required){$('login').hidden=false;$('start').disabled=true;}else{await api('/api/login',{});}
+if(!config.durable_ratings&&ratingsEnabled)$('rating-message').textContent='Lokaler Testbetrieb: Bewertungen sind nur auf diesem Server gespeichert.';
+await loadStats();
