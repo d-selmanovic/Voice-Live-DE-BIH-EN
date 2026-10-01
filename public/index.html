@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activi Voice</title><link rel="stylesheet" href="/style.css"></head>
+<body><header><a href="/">activi voice</a><span>Dein Gespräch. Dein Tempo.</span></header>
+<main><section class="conversation"><h1>Lass uns sprechen.</h1><p>Fragen klären, Informationen suchen und Demo-Tickets vorbereiten. Du kannst jederzeit dazwischenreden.</p>
+<div class="voice"><div class="rings" aria-hidden="true"><i></i><i></i><i></i></div><p id="status" role="status">Bereit für dein erstes Gespräch</p><p id="timer">00:00</p></div>
+<form id="login" hidden><label for="password">Zugangspasswort</label><input id="password" type="password" autocomplete="current-password"><button>Anmelden</button></form>
+<div class="controls"><button id="start">Gespräch starten</button><button id="mute" disabled>Mikrofon ausschalten</button><button id="stop" disabled>Beenden</button></div>
+<audio id="audio" autoplay controls hidden></audio><p id="error" role="alert"></p>
+<p class="note">Du sprichst mit einer KI. Audio wird von OpenAI verarbeitet. Transkripte und bestätigte Demo-Tickets werden im Backend gespeichert. Gespräche enden nach spätestens 10 Minuten.</p></section>
+<aside><section><h2>Gespräch</h2><div id="transcript" aria-live="polite"><p class="empty">Deine gesprochenen Worte und die Antworten erscheinen hier.</p></div></section>
+<section><h2>Aktionen</h2><div id="approvals"><p class="empty">Ticketentwürfe werden hier vor dem Speichern zur Bestätigung angezeigt.</p></div><button id="revise" disabled>Aufgabe zurücksetzen</button><p class="note">Vor einer Korrektur drücken. Offene Ticketentwürfe werden dadurch ungültig.</p><div id="results"></div></section></aside></main>
+<script type="module" src="/app.js"></script></body></html>

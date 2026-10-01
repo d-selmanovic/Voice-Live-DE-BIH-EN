@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: activi-voice-demo
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
