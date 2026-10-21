@@ -28,9 +28,18 @@ class Store:
         ''')
 
     def audit(self, sid, event, details):
+        # Persist technical metadata only. Transcripts, tool arguments, retrieved
+        # memories and document contents must never enter the audit store.
+        allowed = {'operation_id', 'revision', 'delegation_id', 'http_status', 'status', 'response_id'}
+        safe = {k: v for k, v in details.items() if k in allowed and isinstance(v, (str, int, bool, type(None)))}
+        usage = details.get('usage')
+        if isinstance(usage, dict):
+            safe['usage'] = {k: v for k, v in usage.items() if isinstance(v, (int, float))}
+        from integrations import trace
+        trace(event, status=safe.get('status'), operation_id=safe.get('operation_id'), http_status=safe.get('http_status'))
         with self.db:
             self.db.execute('INSERT INTO audit(session_id,event,details) VALUES(?,?,?)',
-                (sid, event, json.dumps(details, ensure_ascii=False)))
+                (sid, event, json.dumps(safe, ensure_ascii=False)))
 
     def create_ticket(self, operation_id, args):
         args = validate_ticket(args)
@@ -39,3 +48,4 @@ class Store:
                 (operation_id, 'demo_' + uuid.uuid4().hex[:12], json.dumps(args)))
         row = self.db.execute('SELECT id FROM tickets WHERE operation_id=?', (operation_id,)).fetchone()
         return {"status": "created", "ticket_id": row[0], "demo": True}
+

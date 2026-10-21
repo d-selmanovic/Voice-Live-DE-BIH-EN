@@ -22,7 +22,7 @@ function cleanup(){
   settingsLocked(false);
 }
 function caption(e){
-  const who=e.type.includes('input_transcript')?'Du':'Activi';
+  const who=e.type.includes('input_transcript')?'Du':'Lena';
   const key=who+':'+(e.item_id || e.turn_id || e.segment_id || 'current');
   let node=captions.get(key);
   if(!node){
@@ -37,8 +37,8 @@ function approval(e){
   $('approvals').querySelector('.empty')?.remove();
   if(document.getElementById('approval_'+e.id))return;
   const box=document.createElement('div'); box.className='approval'; box.id='approval_'+e.id;
-  const title=document.createElement('b'); title.textContent='Demo-Ticket bestätigen';
-  const text=document.createElement('p'); text.textContent=`Referenz: ${e.args.customer_ref}\nPriorität: ${e.args.priority}\n${e.args.issue}`;
+  const title=document.createElement('b'); title.textContent='Aktion bestätigen';
+  const text=document.createElement('p'); text.textContent=Object.entries(e.args).map(([key,value])=>`${key}: ${value}`).join('\n');
   box.append(title,text);
   for(const [label,approved] of [['Bestätigen',true],['Ablehnen',false]]){
     const b=document.createElement('button'); b.textContent=label; if(approved)b.className='approve';
@@ -86,7 +86,7 @@ $('start').onclick=async()=>{
     socket.onmessage=({data})=>{const e=JSON.parse(data);
       if(e.type==='approval')approval(e);
       if(e.type==='approval_closed')document.getElementById('approval_'+e.id)?.remove();
-      if(e.type==='tool_result'){const p=document.createElement('p');p.textContent=e.result.status==='created'?`Demo-Ticket gespeichert: ${e.result.ticket_id}`:`Ticketstatus: ${e.result.status}`;$('results').append(p);}
+      if(e.type==='tool_result'){const p=document.createElement('p');p.textContent=`${e.result.tool || 'Aktion'}: ${e.result.status}`;$('results').append(p);}
       if(e.type==='backend_disconnected'){$('error').textContent='Aufgabenverbindung unterbrochen. Gespräch wird beendet.';stop();}
       if(e.type==='app_closed'){setStatus(e.usage_complete?'Gespräch abgeschlossen':'Gespräch beendet; finale Verbrauchsdaten fehlen');cleanup();}
     };
@@ -149,3 +149,8 @@ for(const id of settingIds)$(id).onchange=()=>remember('activi-'+id,$(id).value)
 if(config.password_required){$('login').hidden=false;$('start').disabled=true;}else{await api('/api/login',{});}
 if(!config.durable_ratings&&ratingsEnabled)$('rating-message').textContent='Lokaler Testbetrieb: Bewertungen sind nur auf diesem Server gespeichert.';
 await loadStats();
+
+
+$('check-integrations').onclick=async()=>{try{const r=await fetch('/api/integrations');if(!r.ok)throw new Error('Bitte zuerst anmelden.');const d=await r.json();const label=v=>v==='configured'?'eingerichtet (kein Live-Test)':v==='metadata_only'?'ohne Inhalte':'Angaben fehlen';$('integrations').textContent=`Supermemory: ${label(d.supermemory)}. Chatwoot: ${label(d.chatwoot)}. Linear: ${label(d.linear)}. Tracing: ${label(d.tracing)}. Chatwoot-Eingang: ${d.webhook_enabled?'aktiv':'noch nicht aktiv'}.`;}catch(e){$('integrations').textContent=e.message;}};
+
+$('resume-chatwoot').onclick=async()=>{try{const id=Number($('resume-conversation').value);if(!Number.isSafeInteger(id)||id<1)throw new Error('Bitte gültige Konversations-ID eingeben.');await api('/api/chatwoot/resume',{conversation_id:id});$('integrations').textContent='Lena für diese Konversation wieder freigegeben.';}catch(e){$('integrations').textContent=e.message;}};

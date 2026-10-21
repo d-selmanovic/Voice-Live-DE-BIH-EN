@@ -6,6 +6,8 @@ import os
 import secrets
 import time
 import uuid
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from aiohttp import web, ClientSession, ClientTimeout, WSMsgType
@@ -13,6 +15,8 @@ from prompts import LIVE, BACKEND, TOOLS
 from state import Store, validate_ticket
 from feedback import FeedbackStore
 from voices import VOICES, LANGUAGES, VERSION, selection, language_prompt
+from integrations import Settings, Integrations, IntegrationError, WRITES, tool_definitions, verify_webhook, trace
+from relay import RelayStore, process_message
 
 ROOT = Path(__file__).resolve().parent
 for path in [ROOT / '.env.local', ROOT.parent / '.env.local']:
@@ -38,6 +42,8 @@ auth = {}
 sessions = {}
 login_attempts = {}
 limits = {}
+CONNECTORS = Settings(os.environ)
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 @web.middleware
@@ -46,6 +52,12 @@ async def security(request, handler):
         return await handler(request)
     if request.host != ORIGIN.split('://', 1)[1]:
         raise web.HTTPForbidden(text='Host nicht erlaubt')
+    if request.path.startswith('/integrations/chatwoot/webhook/'):
+        # This exact route authenticates a server webhook itself. Browser routes
+        # retain their Origin and cookie checks.
+        if request.method != 'POST':
+            raise web.HTTPNotFound()
+        return await handler(request)
     if request.method != 'GET' and request.headers.get('Origin') != ORIGIN:
         raise web.HTTPForbidden(text='Origin nicht erlaubt')
     if request.path.startswith('/api/') and request.path not in ['/api/login', '/api/config']:
@@ -118,16 +130,29 @@ async def run_call(s, envelope):
     did = envelope.get('delegation_id')
     op = f"{s['id']}:{revision}:{cid}"
     result = {'status': 'error'}
+    def before_write():
+        if revision != s['revision'] or s['closing']:
+            raise IntegrationError('stale_or_closed')
     try:
         if revision != s['revision'] or s['closing']:
             raise ValueError('Veralteter Tool-Aufruf')
-        if call['name'] != 'prepare_demo_ticket':
-            raise ValueError('Unbekanntes Tool')
-        args = validate_ticket(json.loads(call['arguments']))
+        name = call['name']
+        args = json.loads(call['arguments'])
+        connectors = s.get('integrations')
+        if name != 'prepare_demo_ticket':
+            if not connectors:
+                raise ValueError('Unbekanntes Tool')
+            args = connectors.validate(name, args)
+            if name not in WRITES:
+                result = await connectors.execute(name, args, {'operation_id': op})
+                return
+        else:
+            args = validate_ticket(args)
         future = asyncio.get_running_loop().create_future()
         approval = uuid.uuid4().hex
-        s['pending'][approval] = {'future': future, 'args': args, 'revision': revision}
-        await emit(s, {'type': 'approval', 'id': approval, 'args': args})
+        review = args if name == 'prepare_demo_ticket' else {'action': name, **args}
+        s['pending'][approval] = {'future': future, 'args': review, 'revision': revision}
+        await emit(s, {'type': 'approval', 'id': approval, 'args': review})
         store.audit(s['id'], 'approval_requested', {'operation_id': op, 'revision': revision, 'args': args})
         try:
             approved = await asyncio.wait_for(future, 90)
@@ -136,7 +161,7 @@ async def run_call(s, envelope):
             elif not approved:
                 result = {'status': 'declined'}
             else:
-                result = store.create_ticket(op, args)
+                result = store.create_ticket(op, args) if name == 'prepare_demo_ticket' else await connectors.execute(name, args, {'operation_id': op, 'before_write': before_write})
         except asyncio.TimeoutError:
             result = {'status': 'timeout'}
         finally:
@@ -144,10 +169,13 @@ async def run_call(s, envelope):
             await emit(s, {'type': 'approval_closed', 'id': approval})
     except (ValueError, TypeError, KeyError):
         result = {'status': 'invalid_arguments'}
-    store.audit(s['id'], 'tool_result', {'operation_id': op, 'delegation_id': did, 'result': result})
-    await send(s, {'type': 'response.item.create', 'event_id': 'tool_' + cid,
-        'item': {'type': 'function_call_output', 'call_id': cid, 'output': json.dumps(result)}})
-    await emit(s, {'type': 'tool_result', 'result': result})
+    except IntegrationError as exc:
+        result = {'status': 'not_confirmed', 'code': str(exc)}
+    finally:
+        store.audit(s['id'], 'tool_result', {'operation_id': op, 'delegation_id': did, 'status': result.get('status')})
+        await send(s, {'type': 'response.item.create', 'event_id': 'tool_' + cid,
+            'item': {'type': 'function_call_output', 'call_id': cid, 'output': json.dumps(result)}})
+        await emit(s, {'type': 'tool_result', 'result': {'status': result.get('status'), 'tool': call.get('name')}})
 
 
 async def finish_response(s, response_id):
@@ -228,6 +256,7 @@ async def create_session(request):
             'instructions': BACKEND, 'tools': TOOLS, 'tool_choice': 'auto', 'parallel_tool_calls': False}}},
         'transport': {'type': 'webrtc', 'sdp': sdp}}
     client = request.app['http']
+    payload['session']['delegation']['responses']['tools'] = TOOLS + tool_definitions(CONNECTORS)
     try:
         async with client.post('https://api.openai.com/v1/live/sessions', headers=headers, json=payload) as response:
             if response.status >= 400:
@@ -247,7 +276,8 @@ async def create_session(request):
             tester = hashlib.sha256(tester_code.encode()).hexdigest()
             await asyncio.to_thread(feedback.new_test, test_id, test_token, tester, voice, language, STUDY_VERSION)
         s = {'id': sid, 'owner': owner, 'revision': 0, 'calls': set(), 'pending': {}, 'listeners': set(),
-            'closed': asyncio.Event(), 'closing': False, 'jobs': set(), 'batches': {}, 'test_id': test_id}
+            'closed': asyncio.Event(), 'closing': False, 'jobs': set(), 'batches': {}, 'test_id': test_id,
+            'integrations': request.app['connectors']}
         sessions[sid] = s
         s['ws'] = await client.ws_connect(f'wss://api.openai.com/v1/live/sessions/{sid}/attach', headers=headers, max_msg_size=4*1024*1024)
         s['reader'] = asyncio.create_task(sideband(s))
@@ -338,7 +368,15 @@ async def static(request):
 async def lifecycle(app):
     async with ClientSession(timeout=ClientTimeout(total=25)) as client:
         app['http'] = client
+        app['connectors'] = Integrations(client, CONNECTORS)
+        app['relay'] = RelayStore(DATABASE_URL, ROOT / 'data' / 'relay.sqlite' if not DATABASE_URL else None) if DATABASE_URL or not ON_RENDER else None
+        app['relay_locks'] = {}
+        app['relay_slots'] = asyncio.Semaphore(4)
+        worker = asyncio.create_task(relay_worker(app)) if CONNECTORS.webhook_enabled and app['relay'] else None
         yield
+        if worker:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
         await asyncio.gather(*(close_session(s) for s in list(sessions.values())), return_exceptions=True)
 
 
@@ -367,11 +405,123 @@ async def ratings(request):
 async def health(request):
     return web.json_response({'status': 'ok'}, headers={'Cache-Control':'no-store'})
 
+
+async def integration_status(request):
+    result = CONNECTORS.status()
+    result['chatwoot_inbox'] = 12
+    result['webhook_enabled'] = bool(CONNECTORS.webhook_enabled and request.app.get('relay'))
+    result['durable_webhook_receipts'] = bool(DATABASE_URL)
+    if request.app.get('relay'):
+        result['deliveries'] = await asyncio.to_thread(request.app['relay'].summary)
+    return web.json_response(result)
+
+
+@asynccontextmanager
+async def conversation_lock(app, cid):
+    async with app['relay_slots']:
+        locks = app['relay_locks']
+        lock, count = locks.get(cid, (asyncio.Lock(), 0))
+        locks[cid] = (lock, count + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            count = locks[cid][1] - 1
+            if count:
+                locks[cid] = (lock, count)
+            else:
+                locks.pop(cid, None)
+
+
+async def relay_worker(app):
+    relay, api = app['relay'], app['connectors']
+    next_recovery = 0
+    while True:
+        try:
+            if time.monotonic() >= next_recovery:
+                next_recovery = time.monotonic() + 30
+                for key, cid in await asyncio.to_thread(relay.recover):
+                    await asyncio.to_thread(relay.pause, f'{CONNECTORS.account}:{cid}')
+                    try:
+                        await api.conversation(cid)
+                        await api.chat('POST', f'/conversations/{cid}/toggle_status', {'status': 'open'})
+                    except IntegrationError:
+                        trace('recovery_handoff_unconfirmed', status='needs_review', operation_id=key)
+            item = await asyncio.to_thread(relay.take)
+            if item:
+                key, event = item
+                async with conversation_lock(app, event['conversation']['id']):
+                    state = await process_message(api, relay, event)
+                await asyncio.to_thread(relay.finish_queue, key, state)
+            else:
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            trace('relay_worker_failure', status='needs_review')
+            await asyncio.sleep(2)
+
+
+async def chatwoot_webhook(request):
+    cfg = CONNECTORS
+    token = request.match_info['token']
+    if not cfg.webhook_enabled or len(cfg.webhook_token) < 32 or not hmac.compare_digest(token, cfg.webhook_token):
+        raise web.HTTPNotFound()
+    if not request.app.get('relay'):
+        raise web.HTTPServiceUnavailable(text='Dauerhafter Eingangsspeicher fehlt')
+    raw = await request.read()
+    if cfg.webhook_secret and not verify_webhook(raw, request.headers, cfg.webhook_secret):
+        raise web.HTTPUnauthorized(text='Webhook-Signatur ungültig')
+    try:
+        event = json.loads(raw)
+        if not isinstance(event, dict):
+            raise ValueError()
+        # Status callbacks are not proof of a new human authorization: a delayed
+        # pending event must never clear a safety pause after an ambiguous write.
+        if event.get('event') == 'conversation_status_changed':
+            return web.json_response({'status': 'ignored'})
+        from relay import identity
+        ids = identity(event, cfg)
+        if ids is None:
+            return web.json_response({'status': 'ignored'})
+        # Persist only opaque IDs before acknowledging Chatwoot's short timeout.
+        # Message contents are fetched canonically by the worker, never queued.
+        inserted = await asyncio.to_thread(request.app['relay'].enqueue, event, cfg)
+        return web.json_response({'status': 'queued' if inserted else 'duplicate'})
+    except (ValueError, KeyError, TypeError):
+        raise web.HTTPBadRequest(text='Ungültiger Webhook')
+    except IntegrationError:
+        raise web.HTTPServiceUnavailable(text='Konversation nicht bestätigt')
+
+
+async def resume_chatwoot(request):
+    body = await request.json()
+    cid = body.get('conversation_id')
+    if set(body) != {'conversation_id'} or type(cid) is not int or cid < 1:
+        raise web.HTTPBadRequest(text='Konversations-ID fehlt')
+    if not request.app.get('relay'):
+        raise web.HTTPServiceUnavailable()
+    try:
+        async with conversation_lock(request.app, cid):
+            conversation = await request.app['connectors'].conversation(cid)
+            if conversation.get('status') != 'pending':
+                raise web.HTTPConflict(text='Konversation zuerst in Chatwoot auf pending setzen')
+            await asyncio.to_thread(request.app['relay'].resume, cid, f'{CONNECTORS.account}:{cid}')
+    except IntegrationError:
+        raise web.HTTPConflict(text='Konversation in Inbox 12 nicht bestätigt')
+    except ValueError:
+        raise web.HTTPConflict(text='Vorgang wird noch verarbeitet; bitte später prüfen')
+    trace('human_resume', status='resumed')
+    return web.json_response({'status': 'resumed'})
+
 def create_app():
     app = web.Application(middlewares=[security], client_max_size=65536)
     app.cleanup_ctx.append(lifecycle)
     app.router.add_get('/api/config', config)
     app.router.add_get('/healthz', health)
+    app.router.add_get('/api/integrations', integration_status)
+    app.router.add_post('/api/chatwoot/resume', resume_chatwoot)
+    app.router.add_post('/integrations/chatwoot/webhook/{token}', chatwoot_webhook)
     app.router.add_post('/api/login', login)
     app.router.add_post('/api/session', create_session)
     app.router.add_get('/api/ratings', ratings)
@@ -384,3 +534,4 @@ def create_app():
 
 if __name__ == '__main__':
     web.run_app(create_app(), host=HOST, port=int(os.getenv('PORT', '3000')), access_log=None)
+

@@ -135,4 +135,58 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats['rows'][0]['language'],'bs')
         self.assertEqual(stats['rows'][0]['overall'],4)
 
+    async def test_webhook_requires_token_signature_and_keeps_browser_auth(self):
+        import hashlib,hmac,json
+        from integrations import Settings
+        from unittest.mock import AsyncMock
+        cfg=Settings({'CHATWOOT_WEBHOOK_ENABLED':'true','CHATWOOT_WEBHOOK_PATH_TOKEN':'x'*40,'CHATWOOT_WEBHOOK_SIGNING_SECRET':'secret','CHATWOOT_ACCOUNT_ID':'2'})
+        path='/integrations/chatwoot/webhook/'+'x'*40
+        raw=json.dumps({'event':'unknown'}).encode()
+        with patch.object(server,'CONNECTORS',cfg):
+            r=await self.client.post(path,data=raw,headers={'Host':'localhost:3000'})
+            self.assertEqual(r.status,401)
+            stamp=str(int(__import__('time').time()))
+            sig='sha256='+hmac.new(b'secret',stamp.encode()+b'.'+raw,hashlib.sha256).hexdigest()
+            r=await self.client.post(path,data=raw,headers={'Host':'localhost:3000','X-Chatwoot-Timestamp':stamp,'X-Chatwoot-Signature':sig})
+            self.assertEqual(r.status,200)
+            r=await self.client.post('/api/session',json={},headers={'Host':'localhost:3000'})
+            self.assertEqual(r.status,403)
+            r=await self.client.get('/api/integrations',headers={'Host':'localhost:3000'})
+            self.assertEqual(r.status,401)
+
+    async def test_real_connector_write_waits_for_approval_and_runs_once(self):
+        from integrations import Integrations,Settings
+        from unittest.mock import AsyncMock
+        api=Integrations(None,Settings({}));api.execute=AsyncMock(return_value={'status':'accepted'})
+        sent=[]
+        class Socket:
+            closed=False
+            async def send_json(self,event):sent.append(event)
+        s={'id':'test','revision':0,'calls':set(),'pending':{},'listeners':set(),'closing':False,'ws':Socket(),'integrations':api}
+        envelope={'event':{'item':{'call_id':'write','name':'memory_add_note','arguments':'{"content":"Synthetic note","namespace":"existing"}'}}}
+        task=asyncio.create_task(server.run_call(s,envelope));await asyncio.sleep(0)
+        api.execute.assert_not_awaited()
+        next(iter(s['pending'].values()))['future'].set_result(True)
+        await task;await server.run_call(s,envelope)
+        self.assertEqual(api.execute.await_count,1);self.assertEqual(len(sent),1)
+
+    async def test_real_connector_read_continues_without_approval(self):
+        from integrations import Integrations,Settings
+        from unittest.mock import AsyncMock
+        api=Integrations(None,Settings({}));api.execute=AsyncMock(return_value={'status':'ok','results':[]})
+        sent=[]
+        class Socket:
+            closed=False
+            async def send_json(self,event):sent.append(event)
+        s={'id':'test','revision':0,'calls':set(),'pending':{},'listeners':set(),'closing':False,'ws':Socket(),'integrations':api}
+        await server.run_call(s,{'event':{'item':{'call_id':'read','name':'memory_search','arguments':'{"query":"FAQ","namespace":"existing"}'}}})
+        self.assertEqual(api.execute.await_count,1);self.assertFalse(s['pending']);self.assertEqual(len(sent),1)
+
+    async def test_audit_drops_transcripts_and_tool_arguments(self):
+        server.store.audit('test','session.input_transcript.delta',{'delta':'private candidate data','args':{'token':'secret'}})
+        details=server.store.db.execute('SELECT details FROM audit ORDER BY id DESC LIMIT 1').fetchone()[0]
+        self.assertNotIn('private',details);self.assertNotIn('secret',details)
+
+
 if __name__ == '__main__': unittest.main()
+

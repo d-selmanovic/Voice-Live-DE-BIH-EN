@@ -1,3 +1,10 @@
+# Lena
+
+Aktueller Stand und vollständige Einrichtung: [LENA-INTEGRATIONEN.md](LENA-INTEGRATIONEN.md).
+Lena betreut Kandidaten im geschützten Browser-Sprachtest und in der ausdrücklich freigegebenen Chatwoot-Test-Inbox12. Die neue Anbindung ergänzt den ursprünglichen Sprachvergleich. Telefonanschluss und Linear-Laufzeitzugang sind gesondert abzunehmen. Alte Demo-Ticketfunktionen werden im aktuellen Prompt nicht exponiert.
+
+---
+
 # Activi GPT-Live Voice Agent
 
 Private, lokal startbare erste Version. Browser-Audio per WebRTC, GPT-Live für
@@ -117,3 +124,4 @@ EU-Datenhaltung ist mit diesem Paket allein nicht zugesichert.
 - https://developers.openai.com/api/docs/guides/voice-webrtc
 - https://developers.openai.com/api/docs/guides/live-delegation
 - https://developers.openai.com/api/docs/guides/voice-server-controls
+

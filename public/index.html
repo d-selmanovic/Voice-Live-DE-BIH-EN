@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lena</title><link rel="stylesheet" href="/style.css"></head>
 <body><header><a href="/">Lena</a><span>Dein Gespräch. Dein Tempo.</span></header>
-<main><section class="conversation"><h1>Lass uns sprechen.</h1><p>Fragen klären, Informationen suchen und Demo-Tickets vorbereiten. Du kannst jederzeit dazwischenreden.</p>
+<main><section class="conversation"><h1>Lass uns sprechen.</h1><p>Kandidatenbetreuung mit Lena. Geschützter Testzugang für das Team. Du kannst jederzeit dazwischenreden.</p>
 <div class="voice"><div class="rings" aria-hidden="true"><i></i><i></i><i></i></div><p id="status" role="status">Bereit für dein erstes Gespräch</p><p id="timer">00:00</p></div>
 <form id="login" hidden><label for="password">Zugangspasswort</label><input id="password" type="password" autocomplete="current-password"><button>Anmelden</button></form>
 <div class="test-settings">
@@ -12,9 +12,9 @@
 <p class="note">Eine Stimme und Sprache pro Test. Zum Wechseln das Gespräch beenden und neu starten. Verwende immer denselben Testcode, auch auf anderen Geräten. Bitte keine Namen oder E-Mail-Adressen eingeben.</p>
 <div class="controls"><button id="start">Gespräch starten</button><button id="mute" disabled>Mikrofon ausschalten</button><button id="stop" disabled>Beenden</button></div>
 <audio id="audio" autoplay controls hidden></audio><p id="error" role="alert"></p>
-<p class="note">Du sprichst mit einer KI. Audio wird von OpenAI verarbeitet. Transkripte und bestätigte Demo-Tickets werden im Backend gespeichert. Gespräche enden nach spätestens 10 Minuten.</p></section>
-<aside><section><h2>Gespräch</h2><div id="transcript" aria-live="polite"><p class="empty">Deine gesprochenen Worte und die Antworten erscheinen hier.</p></div></section>
-<section><h2>Aktionen</h2><div id="approvals"><p class="empty">Ticketentwürfe werden hier vor dem Speichern zur Bestätigung angezeigt.</p></div><button id="revise" disabled>Aufgabe zurücksetzen</button><p class="note">Vor einer Korrektur drücken. Offene Ticketentwürfe werden dadurch ungültig.</p><div id="results"></div></section>
+<p class="note">Du sprichst mit einer KI. Audio wird von OpenAI verarbeitet. Technische Ablaufdaten werden ohne Gesprächsinhalte protokolliert. Freigegebene Notizen werden an den gewählten Dienst gesendet. Gespräche enden nach spätestens 10 Minuten.</p></section>
+<aside><section><h2>Verbindungen</h2><p id="integrations">Nach Anmeldung prüfen.</p><button id="check-integrations" type="button">Verbindungen prüfen</button><label for="resume-conversation">Chatwoot-Konversation fortsetzen<input id="resume-conversation" type="number" min="1" placeholder="Konversations-ID"></label><button id="resume-chatwoot" type="button">Lena nach Übergabe freigeben</button><p class="note">Zuerst in Chatwoot auf pending setzen, dann hier bewusst freigeben.</p><p class="note">Browser-Sprachgespräch. Telefonanschluss, E-Mail und Viber sind noch nicht verbunden.</p></section><section><h2>Gespräch</h2><div id="transcript" aria-live="polite"><p class="empty">Deine gesprochenen Worte und die Antworten erscheinen hier.</p></div></section>
+<section><h2>Aktionen</h2><div id="approvals"><p class="empty">Schreibaktionen werden hier vor dem Ausführen zur Bestätigung angezeigt.</p></div><button id="revise" disabled>Aufgabe zurücksetzen</button><p class="note">Vor einer Korrektur drücken. Offene Freigaben werden dadurch ungültig.</p><div id="results"></div></section>
 <section><h2>Stimme bewerten</h2><p id="rating-context">Starte ein Gespräch und höre dir die Stimme an.</p>
 <form id="rating-form"><fieldset id="rating-fields" disabled>
 <label for="pronunciation">Aussprache<select id="pronunciation" required><option value="">Bitte auswählen</option><option value="1">1 – sehr schlecht</option><option value="2">2 – schlecht</option><option value="3">3 – mittel</option><option value="4">4 – gut</option><option value="5">5 – sehr gut / muttersprachlich</option></select></label>
@@ -30,3 +30,4 @@
 <div class="table-wrap"><table><caption id="stats-caption">Bewertungen der aktuellen Testversion</caption><thead><tr><th>Stimme</th><th>Testcodes</th><th>Aussprache</th><th>Verständlichkeit</th><th>Natürlichkeit</th><th>Gesamt</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
 <p class="note">Alle Werte von 1 bis 5. Gesamt = Mittelwert der drei Kriterien. Sortierung nach Aussprache. Testcodes sind selbst gewählte Kennungen, keine geprüften Personenidentitäten. Wenige Bewertungen sind noch keine belastbare Empfehlung. Statistiken enthalten keine Gesprächsinhalte; Bewertungen sind für Personen mit dem Zugangspasswort sichtbar.</p></section>
 <script type="module" src="/app.js"></script></body></html>
+
